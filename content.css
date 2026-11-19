@@ -1,0 +1,26 @@
+.dscm-controls {
+  display: inline-flex !important;
+  align-items: center !important;
+  margin-inline-start: 8px !important;
+  vertical-align: middle !important;
+}
+.dscm-fold-button {
+  appearance: none !important;
+  border: 1px solid rgba(128,128,128,.45) !important;
+  border-radius: 7px !important;
+  padding: 4px 9px !important;
+  background: rgba(128,128,128,.12) !important;
+  color: inherit !important;
+  font: 12px/1.5 system-ui, sans-serif !important;
+  cursor: pointer !important;
+}
+.dscm-fold-button:hover { background: rgba(128,128,128,.24) !important; }
+pre.dscm-collapsed {
+  max-height: 0 !important;
+  overflow: hidden !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  border-width: 0 !important;
+}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مدیریت کد DeepSeek</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header>
+  <div class="brand">مدیریت کد DeepSeek</div>
+  <div class="sub">جمع‌کردن کدها، ساخت فایل‌ها و اعمال بسته تغییرات</div>
+</header>
+
+<section class="panel">
+  <div class="section-title">پوشه پروژه</div>
+  <div id="folderLabel" class="folder">هنوز پوشه‌ای انتخاب نشده است</div>
+  <button id="chooseFolder" class="secondary">انتخاب پوشه پروژه</button>
+</section>
+
+<section class="panel">
+  <div class="section-title">مدیریت کدهای صفحه</div>
+  <div class="actions">
+    <button id="scan" class="primary">شناسایی کدهای صفحه</button>
+    <button id="collapseAll" class="secondary">جمع‌کردن همه</button>
+    <button id="expandAll" class="secondary">بازکردن همه</button>
+  </div>
+  <div id="status" class="status">ابتدا صفحه گفتگو و پوشه پروژه را آماده کن.</div>
+  <div id="fileList" class="file-list"></div>
+  <label class="check"><input type="checkbox" id="overwrite"> فایل‌های موجود را جایگزین کن</label>
+  <button id="createFiles" class="primary" disabled>ساخت فایل‌های انتخاب‌شده در پروژه</button>
+</section>
+
+<section class="panel">
+  <div class="section-title">بسته تغییرات (Code Change Package)</div>
+  <div id="ccpStatus" class="status">هنوز بسته‌ای شناسایی نشده است.</div>
+  <div id="ccpSummary" class="ccp-summary" hidden></div>
+  <div id="ccpList" class="file-list"></div>
+  <label class="check"><input type="checkbox" id="ccpOverwrite"> فایل‌های موجود را جایگزین کن</label>
+  <button id="applyCcp" class="primary" disabled>اعمال بسته تغییرات</button>
+</section>
+
+<footer>نسخه ۱.۱ · فایل‌ها فقط پس از انتخاب پوشه و تأیید تو نوشته می‌شوند.</footer>
+<script src="ccp.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

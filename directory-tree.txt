@@ -1,0 +1,8 @@
+deepseek-code-manager/
+├── ccp.js
+├── content.css
+├── content.js
+├── manifest.json
+├── popup.css
+├── popup.html
+└── popup.js
