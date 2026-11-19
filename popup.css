@@ -12,11 +12,14 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .secondary { background: #edf0f4; color: #252a32; width: 100%; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .actions #scan { grid-column: 1 / -1; }
+.actions #loadCcp { grid-column: 1 / -1; }
+.actions #applyCcp { grid-column: 1 / -1; }
 .status { color: #596271; font-size: 11px; margin: 9px 0; }
 .file-list { max-height: 220px; overflow: auto; }
 .file-row { border-top: 1px solid #edf0f3; padding: 8px 0; }
 .file-row label { display: flex; gap: 7px; align-items: flex-start; cursor: pointer; }
 .file-row.clickable:hover { background: #fafbfd; }
+.file-row.selected { background: #f0f7ff; }
 .file-path { font-family: ui-monospace, monospace; direction: ltr; text-align: left; overflow-wrap: anywhere; font-size: 11px; font-weight: 650; }
 .file-meta { color: #707987; font-size: 10px; }
 .check { display: block; margin: 10px 0; font-size: 11px; }
@@ -25,4 +28,9 @@ footer { text-align: center; }
 .badge-create { background: #dcfce7; color: #166534; }
 .badge-patch  { background: #fef9c3; color: #854d0e; }
 .badge-replace{ background: #dbeafe; color: #1e40af; }
-.ccp-summary { background: #f5f6f8; border-radius: 7px; padding: 8px; margin-bottom: 8px; font-size: 11px; color: #404653; }
+.ccp-summary { background: #f5f6f8; border-radius: 7px; padding: 8px; margin-bottom: 8px; font-size: 11px; color: #404653; white-space: pre-wrap; }
+.paste-wrap { margin: 8px 0; border: 1px dashed #cfd6df; border-radius: 8px; padding: 6px 9px; background: #fbfcfe; }
+.paste-wrap summary { cursor: pointer; font-size: 11px; color: #4b5563; font-weight: 650; }
+.paste-area { width: 100%; margin-top: 8px; border: 1px solid #d7dde5; border-radius: 7px; padding: 8px; font-family: ui-monospace, monospace; font-size: 11px; direction: ltr; text-align: left; resize: vertical; background: white; }
+.paste-area:focus { outline: 2px solid #2563eb33; border-color: #2563eb; }
+.paste-wrap button { margin-top: 6px; }

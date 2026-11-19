@@ -35,12 +35,22 @@
   <div class="section-title">بسته تغییرات (Code Change Package)</div>
   <div id="ccpStatus" class="status">هنوز بسته‌ای شناسایی نشده است.</div>
   <div id="ccpSummary" class="ccp-summary" hidden></div>
+
+  <details id="ccpPasteWrap" class="paste-wrap">
+    <summary>پیست دستی JSON (اگر شناسایی نشد)</summary>
+    <textarea id="ccpPasteArea" class="paste-area" rows="6" placeholder="محتوای JSON بسته تغییرات را اینجا پیست کن..."></textarea>
+    <button id="parsePaste" class="secondary">تحلیل JSON پیست‌شده</button>
+  </details>
+
   <div id="ccpList" class="file-list"></div>
   <label class="check"><input type="checkbox" id="ccpOverwrite"> فایل‌های موجود را جایگزین کن</label>
-  <button id="applyCcp" class="primary" disabled>اعمال بسته تغییرات</button>
+  <div class="actions">
+    <button id="loadCcp" class="secondary">بازخوانی بسته از صفحه</button>
+    <button id="applyCcp" class="primary" disabled>اعمال بسته تغییرات</button>
+  </div>
 </section>
 
-<footer>نسخه ۱.۱ · فایل‌ها فقط پس از انتخاب پوشه و تأیید تو نوشته می‌شوند.</footer>
+<footer>نسخه ۱.۲ · فایل‌ها فقط پس از انتخاب پوشه و تأیید تو نوشته می‌شوند.</footer>
 <script src="ccp.js"></script>
 <script src="popup.js"></script>
 </body>

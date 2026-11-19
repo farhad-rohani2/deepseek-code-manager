@@ -2,12 +2,14 @@
   if (window.__dsCodeManagerInstalled) return;
   window.__dsCodeManagerInstalled = true;
 
+  const CCP = globalThis.CCP || null;
+
   const BUTTON_CLASS = "dscm-fold-button";
   const COLLAPSED_CLASS = "dscm-collapsed";
   const processed = new WeakSet();
 
   function cleanPath(value) {
-    return (value || "").replace(/[`"'\\s]/g, "").replace(/^\/+/, "").trim();
+    return (value || "").replace(/[`"'\s]/g, "").replace(/^\/+/, "").trim();
   }
 
   function findCodeRoot(banner) {
@@ -95,9 +97,68 @@
     return result;
   }
 
+  function isDiffHeading(el) {
+    if (!el || !/^H[1-6]$/.test(el.tagName)) return false;
+    const text = (el.textContent || "").trim().toLowerCase();
+    return text === "diff" || text === "code-change-package" || text === "ccp";
+  }
+
+  function closestCodeBlockAfter(heading) {
+    let node = heading.nextElementSibling;
+    let scanned = 0;
+    while (node && scanned < 3) {
+      if (node.tagName === "PRE") return node;
+      const pre = node.querySelector && node.querySelector("pre");
+      if (pre) return pre;
+      node = node.nextElementSibling;
+      scanned++;
+    }
+    return null;
+  }
+
+  function findLastCodeBlockText() {
+    // ۱) اولویت: تیترهای h3/h2/... با عنوان diff / code-change-package / ccp
+    let last = "";
+    const headings = document.querySelectorAll("h1,h2,h3,h4,h5,h6");
+    for (const heading of headings) {
+      if (!isDiffHeading(heading)) continue;
+      const pre = closestCodeBlockAfter(heading);
+      if (!pre) continue;
+      const text = pre.innerText ?? pre.textContent ?? "";
+      if (text && /"format"\s*:\s*"code-change-package"/.test(text)) last = text;
+    }
+    if (last) return last;
+
+    // ۲) همه بلوک‌های کد معمولی
+    const banners = [...document.querySelectorAll(".md-code-block-banner-wrap")];
+    for (const banner of banners) {
+      const found = findCodeRoot(banner);
+      if (!found) continue;
+      const code = found.pre.querySelector("code") || found.pre;
+      const text = code.innerText ?? code.textContent ?? "";
+      if (text && /"format"\s*:\s*"code-change-package"/.test(text)) last = text;
+    }
+    return last;
+  }
+
+  function extractCCP() {
+    if (!CCP) return { ok: false, error: "ماژول CCP در صفحه بارگذاری نشد." };
+    const text = findLastCodeBlockText();
+    if (!text) return { ok: false, error: "هیچ بلوک Code Change Package در صفحه پیدا نشد." };
+    const parsed = CCP.parseCCP(text);
+    if (!parsed) return { ok: false, error: "JSON معتبر با format=code-change-package پیدا نشد." };
+    const validation = CCP.validateCCP(parsed.ccp);
+    if (!validation.ok) return { ok: false, error: "بسته تغییرات نامعتبر است.", errors: validation.errors };
+    return { ok: true, ccp: parsed.ccp, raw: parsed.raw };
+  }
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "DSCM_SCAN") {
       sendResponse({ blocks: extractBlocks(), page: location.href });
+    }
+    if (message?.type === "DSCM_EXTRACT_CCP") {
+      try { sendResponse(extractCCP()); }
+      catch (e) { sendResponse({ ok: false, error: e.message }); }
     }
     if (message?.type === "DSCM_COLLAPSE_ALL" || message?.type === "DSCM_EXPAND_ALL") {
       scan();

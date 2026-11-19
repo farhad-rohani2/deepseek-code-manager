@@ -1,6 +1,8 @@
 const $ = (id) => document.getElementById(id);
 let blocks = [];
 let directoryHandle = null;
+let ccpData = null;
+let ccpSelected = new Set();
 const DB_NAME = "dscm-db";
 const STORE = "handles";
 
@@ -69,6 +71,134 @@ function renderBlocks() {
 }
 function setStatus(message) { $("status").textContent = message; }
 
+function setCcpStatus(message, isError) {
+  const el = $("ccpStatus");
+  el.textContent = message;
+  el.style.color = isError ? "#b42318" : "#596271";
+}
+
+function renderCcp() {
+  const list = $("ccpList");
+  const summary = $("ccpSummary");
+  list.innerHTML = "";
+  ccpSelected = new Set();
+  if (!ccpData) {
+    summary.hidden = true;
+    summary.textContent = "";
+    updateApplyButton();
+    return;
+  }
+  const ccp = ccpData;
+  summary.hidden = false;
+  summary.textContent =
+      `${ccp.project?.name || "پروژه"} · ${ccp.summary || ""}\n` +
+      `${ccp.files.length} فایل` +
+      (ccp.commands?.length ? ` · ${ccp.commands.length} دستور` : "");
+  ccp.files.forEach((file, index) => {
+    ccpSelected.add(index);
+    const row = document.createElement("div");
+    row.className = "file-row selected";
+    const label = document.createElement("label");
+    const check = document.createElement("input");
+    check.type = "checkbox"; check.checked = true; check.dataset.ccpIndex = String(index);
+    check.addEventListener("change", () => {
+      if (check.checked) ccpSelected.add(index); else ccpSelected.delete(index);
+      row.classList.toggle("selected", check.checked);
+      updateApplyButton();
+    });
+    const text = document.createElement("div");
+    const path = document.createElement("div");
+    path.className = "file-path";
+    path.textContent = file.path;
+    const meta = document.createElement("div");
+    meta.className = "file-meta";
+    const badge = document.createElement("span");
+    badge.className = "badge badge-" + file.action;
+    badge.textContent = file.action;
+    meta.append(badge);
+    if (file.action === "patch") {
+      const len = (file.patch || "").split("\n").length;
+      meta.append(` · ${len} خط diff`);
+    } else {
+      meta.append(` · ${(file.content || "").length.toLocaleString()} کاراکتر`);
+    }
+    text.append(path, meta);
+    label.append(check, text);
+    row.append(label);
+    list.append(row);
+  });
+  updateApplyButton();
+}
+
+function updateApplyButton() {
+  $("applyCcp").disabled = !ccpData || ccpSelected.size === 0;
+}
+
+function parseCcpText(rawText) {
+  if (!rawText || !rawText.trim()) {
+    return { ok: false, error: "متنی برای تحلیل وجود ندارد." };
+  }
+  if (!window.CCP) return { ok: false, error: "ماژول CCP بارگذاری نشد." };
+  const parsed = CCP.parseCCP(rawText);
+  if (!parsed) return { ok: false, error: "JSON معتبر با format=code-change-package پیدا نشد." };
+  const validation = CCP.validateCCP(parsed.ccp);
+  if (!validation.ok) return { ok: false, error: "بسته تغییرات نامعتبر است.", errors: validation.errors };
+  return { ok: true, ccp: parsed.ccp };
+}
+
+async function loadCcpFromPage() {
+  setCcpStatus("در حال خواندن بسته از صفحه...");
+  try {
+    const response = await sendToPage({ type: "DSCM_EXTRACT_CCP" });
+    if (!response?.ok) {
+      ccpData = null; renderCcp();
+      const detail = response?.errors?.length ? "\n" + response.errors.join("\n") : "";
+      setCcpStatus((response?.error || "خطا در خواندن بسته.") + detail, true);
+      $("ccpPasteWrap").open = true;
+      return;
+    }
+    ccpData = response.ccp;
+    renderCcp();
+    setCcpStatus(`بسته شناسایی شد: ${ccpData.files.length} فایل.`);
+  } catch (e) {
+    ccpData = null; renderCcp();
+    setCcpStatus(e.message || "خطا در خواندن صفحه.", true);
+    $("ccpPasteWrap").open = true;
+  }
+}
+
+function parsePastedCcp() {
+  const raw = $("ccpPasteArea").value;
+  const result = parseCcpText(raw);
+  if (!result.ok) {
+    ccpData = null; renderCcp();
+    const detail = result.errors?.length ? "\n" + result.errors.join("\n") : "";
+    setCcpStatus((result.error || "تحلیل ناموفق بود.") + detail, true);
+    return;
+  }
+  ccpData = result.ccp;
+  renderCcp();
+  setCcpStatus(`بسته پیست‌شده تحلیل شد: ${ccpData.files.length} فایل.`);
+}
+
+async function applyCcp() {
+  if (!ccpData) return;
+  if (!directoryHandle) { setCcpStatus("ابتدا پوشه پروژه را انتخاب کن.", true); return; }
+  const selectedFiles = ccpData.files.filter((_, i) => ccpSelected.has(i));
+  if (!selectedFiles.length) { setCcpStatus("هیچ فایلی انتخاب نشده است.", true); return; }
+  const preview = selectedFiles.map(f => `${f.action}: ${f.path}`).join("\n");
+  if (!confirm(`این تغییرات در پوشه ${directoryHandle.name} اعمال می‌شوند:\n\n${preview}\n\nادامه می‌دهی؟`)) return;
+  try {
+    if (!(await ensurePermission(directoryHandle))) { setCcpStatus("مجوز نوشتن در پوشه داده نشد.", true); return; }
+    const ccp = { ...ccpData, files: selectedFiles };
+    const result = await CCP.applyCCP(directoryHandle, ccp, { overwrite: $("ccpOverwrite").checked });
+    setCcpStatus(`تمام شد: ${result.written} ایجاد، ${result.replaced} جایگزین، ${result.patched} patch، ${result.skipped} رد شد.`);
+    console.info("CCP log", result.log);
+  } catch (e) {
+    setCcpStatus("خطا در اعمال بسته: " + e.message, true);
+  }
+}
+
 async function chooseFolder() {
   if (!window.showDirectoryPicker) {
     setStatus("انتخاب پوشه در این نسخه Chrome پشتیبانی نمی‌شود. Chrome را به‌روز کن.");
@@ -129,7 +259,7 @@ async function writeOne(root, path, content, overwrite) {
 async function createFiles() {
   if (!directoryHandle) { setStatus("ابتدا پوشه پروژه را انتخاب کن."); return; }
   const selected = [...$("fileList").querySelectorAll('input[type="checkbox"]:checked')]
-    .map(input => blocks[Number(input.dataset.index)]).filter(Boolean);
+      .map(input => blocks[Number(input.dataset.index)]).filter(Boolean);
   const prepared = selected.map(block => ({ ...block, safePath: safeRelativePath(block.path) }));
   const invalid = prepared.filter(b => !b.safePath);
   if (invalid.length) { setStatus("مسیر نامعتبر وجود دارد؛ مسیر فایل‌ها را بررسی کن."); return; }
@@ -154,4 +284,7 @@ $("scan").addEventListener("click", scanPage);
 $("collapseAll").addEventListener("click", () => collapseAll("DSCM_COLLAPSE_ALL"));
 $("expandAll").addEventListener("click", () => collapseAll("DSCM_EXPAND_ALL"));
 $("createFiles").addEventListener("click", createFiles);
+$("loadCcp").addEventListener("click", loadCcpFromPage);
+$("applyCcp").addEventListener("click", applyCcp);
+$("parsePaste").addEventListener("click", parsePastedCcp);
 restoreFolder();

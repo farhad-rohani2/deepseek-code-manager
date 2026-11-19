@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "DeepSeek Code Manager",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Collapse DeepSeek code blocks, jump to them from popup, and apply structured Code Change Packages.",
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://chat.deepseek.com/*",
@@ -23,6 +24,7 @@
         "https://*.deepseek.com/*"
       ],
       "js": [
+        "ccp.js",
         "content.js"
       ],
       "css": [
