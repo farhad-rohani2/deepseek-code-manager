@@ -42,13 +42,7 @@ async function sendToPage(message) {
   }
   return chrome.tabs.sendMessage(tab.id, message);
 }
-function safeRelativePath(input) {
-  let path = String(input || "").trim().replace(/\\\\/g, "/").replace(/^\/+/, "");
-  if (!path || path.includes("\0") || /^[a-z]:/i.test(path)) return null;
-  const parts = path.split("/").filter(Boolean);
-  if (parts.some(p => p === "." || p === "..")) return null;
-  return parts.join("/");
-}
+function safeRelativePath(input) { return CCP.safeRelativePath(input); }
 function renderBlocks() {
   $("fileList").innerHTML = "";
   blocks.forEach((block, index) => {
@@ -231,12 +225,20 @@ async function applyCcp() {
   const selectedFiles = ccpData.files.filter((_, i) => ccpSelected.has(i));
   if (!selectedFiles.length) { setCcpStatus("هیچ فایلی انتخاب نشده است.", true); return; }
   const preview = selectedFiles.map(f => `${f.action}: ${f.path}`).join("\n");
+  try {
+    // مجوز باید همان لحظه کلیک (با user activation) گرفته شود، نه بعد از confirm
+    if (!(await ensurePermission(directoryHandle))) { setCcpStatus("مجوز نوشتن در پوشه داده نشد. پوشه را دوباره انتخاب کن.", true); return; }
+  } catch (e) {
+    setCcpStatus("خطا در دریافت مجوز پوشه: " + e.message + " — پوشه را دوباره انتخاب کن.", true);
+    return;
+  }
   if (!confirm(`این تغییرات در پوشه ${directoryHandle.name} اعمال می‌شوند:\n\n${preview}\n\nادامه می‌دهی؟`)) return;
   try {
-    if (!(await ensurePermission(directoryHandle))) { setCcpStatus("مجوز نوشتن در پوشه داده نشد.", true); return; }
     const ccp = { ...ccpData, files: selectedFiles };
     const result = await CCP.applyCCP(directoryHandle, ccp, { overwrite: $("ccpOverwrite").checked });
-    setCcpStatus(`تمام شد: ${result.written} ایجاد، ${result.replaced} جایگزین، ${result.patched} patch، ${result.deleted} حذف، ${result.skipped} رد شد.`);
+    setCcpStatus(`تمام شد: ${result.written} ایجاد، ${result.replaced} جایگزین، ${result.patched} patch، ${result.deleted} حذف، ${result.skipped} رد شد.`, result.skipped > 0);
+    $("ccpSummary").hidden = false;
+    $("ccpSummary").textContent = result.log.join("\n");
     console.info("CCP log", result.log);
   } catch (e) {
     setCcpStatus("خطا در اعمال بسته: " + e.message, true);
@@ -332,77 +334,138 @@ async function copyPrompt(text, label) {
   }
 }
 
-const PROMPT_FA = `از این به بعد هنگام تولید یا اصلاح کد پروژه، خروجی را به شکل یک بسته تغییرات ساختاریافته (Code Change Package) تولید کن.
-
-قواعد:
-
-1. اگر فایل جدیدی لازم است، مسیر کامل نسبی آن را مشخص کن.
-2. اگر فایل موجود باید اصلاح شود، به‌جای ارسال کل فایل، تغییرات را در قالب Git Unified Diff ارائه بده.
-3. اگر تغییرات گسترده هستند و Diff قابل اتکا نیست، محتوای کامل فایل را ارسال کن.
-4. هیچ تغییری را بدون مشخص کردن مسیر فایل انجام‌شده فرض نکن.
-5. تغییرات هر فایل باید مستقل و قابل بررسی باشند.
-6. وابستگی‌ها، دستورات نصب و دستورات لازم برای اجرا را نیز مشخص کن.
-7. مسیرها باید نسبی به ریشه پروژه باشند.
-8. کدها را خلاصه نکن و از عبارت‌هایی مثل «بقیه کد بدون تغییر» استفاده نکن.
-9. خروجی نهایی را فقط در یک بلوک JSON معتبر قرار بده؛ قبل و بعد از آن توضیح اضافه ننویس.
-
-ساختار خروجی:
-
-{
-  "format": "code-change-package",
-  "version": 1,
-  "project": { "name": "project-name" },
-  "summary": "توضیح تغییرات",
-  "files": [
-    { "path": "src/example.js", "action": "create", "content": "کد کامل فایل جدید" },
-    { "path": "src/app.js", "action": "patch", "patch": "محتوای کامل Git Unified Diff" },
-    { "path": "src/config.js", "action": "replace", "content": "محتوای کامل فایل جایگزین" },
-    { "path": "src/legacy.js", "action": "delete" }
+const FENCE = "```";
+const EXAMPLE_ORIGINAL_APP = 'const express = require("express");\nconst app = express();\n\napp.get("/", (req, res) => {\n  res.send("Hello");\n});\n\napp.listen(3000);\n';
+const EXAMPLE_PATCH = [
+  "--- a/src/app.js",
+  "+++ b/src/app.js",
+  "@@ -1,8 +1,9 @@",
+  ' const express = require("express");',
+  '+const { greet } = require("./utils/greet");',
+  " const app = express();",
+  " ",
+  ' app.get("/", (req, res) => {',
+  '-  res.send("Hello");',
+  '+  res.send(greet("World"));',
+  " });",
+  " ",
+  " app.listen(3000);",
+  ""
+].join("\n");
+const EXAMPLE_CCP = {
+  format: "code-change-package",
+  version: 1,
+  project: { name: "my-app" },
+  summary: "افزودن تابع greet و استفاده از آن در app.js",
+  files: [
+    { path: "src/utils/greet.js", action: "create", content: 'function greet(name) {\n  return `Hello ${name}`;\n}\n\nmodule.exports = { greet };\n' },
+    { path: "src/app.js", action: "patch", patch: EXAMPLE_PATCH },
+    { path: "src/config.js", action: "replace", content: 'module.exports = {\n  port: 3000\n};\n' },
+    { path: "src/legacy.js", action: "delete" }
   ],
-  "commands": [ "npm install", "npm run build" ]
-}
+  commands: ["npm install", "node src/app.js"]
+};
+const EXAMPLE_JSON = JSON.stringify(EXAMPLE_CCP, null, 2);
 
-مقادیر action فقط create، patch، replace و delete باشند.
-برای patch حتماً Diff استاندارد و قابل اعمال با Git تولید کن.
-JSON باید معتبر باشد و رشته‌ها، خط‌های جدید و کاراکترهای خاص به‌درستی Escape شوند.
+const PROMPT_FA = `از این به بعد هنگام تولید یا اصلاح کد پروژه، خروجی را فقط به شکل یک «بسته تغییرات ساختاریافته» (Code Change Package) بده.
 
-خروجی را در یک بلاک کد با زبان json قرار بده. حتماً format دقیقاً برابر code-change-package و version برابر 1 باشد. برای patch از Git Unified Diff استاندارد (--- a/... و +++ b/... و خطوط @@ -l,c +l,c @@) استفاده کن و مسیرها در path نسبی و بدون / ابتدایی باشند.`;
+## قواعد کلی
+1. مسیر هر فایل نسبی به ریشه پروژه باشد؛ بدون / ابتدایی، بدون .. و بدون درایو ویندوز.
+2. فایل جدید: action برابر create و محتوای کامل در content.
+3. فایل موجود با تغییر کوچک: action برابر patch و Git Unified Diff در patch.
+4. فایل موجود با تغییر گسترده (بیش از حدود نیمی از فایل): action برابر replace و محتوای کامل فایل در content.
+5. حذف فایل: action برابر delete (بدون content و patch).
+6. کد را خلاصه نکن و عباراتی مثل «بقیه کد بدون تغییر» ننویس.
+7. هر مسیر فقط یک بار در files بیاید.
+8. دستورهای لازم (نصب وابستگی، مایگریشن، build و...) را در commands بنویس؛ اگر دستوری لازم نیست commands را [] بگذار. کلید commands همیشه باید وجود داشته باشد.
+9. project.name و summary همیشه پر باشند.
 
-const PROMPT_EN = `From now on, when generating or modifying project code, produce the output as a structured Code Change Package.
+## قواعد patch (مهم‌ترین بخش؛ خطا اینجا رایج است)
+- دقیقاً این ساختار: خط --- a/مسیر، خط +++ b/مسیر، سپس یک یا چند hunk با هدر @@ -شروعقدیم,تعدادقدیم +شروعجدید,تعدادجدید @@
+- در هر hunk هر خط با یکی از این سه نویسه شروع شود: فاصله (خط بدون تغییر)، - (حذف)، + (افزودن).
+- خط خالیِ بدون تغییر هم باید یک فاصله داشته باشد (یعنی در JSON به شکل "\\n \\n"). خط کاملاً خالی بدون فاصله ننویس.
+- حدود ۳ خط context بدون تغییر قبل و بعد از هر تغییر بگذار و متن context را دقیقاً مطابق فایل اصلی (با همان فاصله‌ها و indent) بنویس.
+- تعداد قدیم = خطوط context + خطوط حذف‌شده. تعداد جدید = خطوط context + خطوط افزوده‌شده. شماره خط شروع را با دقت بنویس.
+- اگر محتوای فعلی فایل را ندیده‌ای و مطمئن نیستی، به‌جای patch از replace استفاده کن؛ حدس نزن.
+- پایان patch با یک \\n باشد.
 
-Rules:
+## قواعد JSON
+- JSON کاملاً معتبر باشد: رشته‌ها داخل "..."، خط جدید به شکل \\n، گیومه داخل رشته به شکل \\"، بک‌اسلش به شکل \\\\ ، و بدون کامنت و بدون ویرگول اضافی.
+- format دقیقاً "code-change-package" و version عدد 1 باشد.
+- action فقط یکی از create، patch، replace، delete باشد.
 
-1. If a new file is needed, specify its full relative path.
-2. If an existing file must be modified, provide the changes as a Git Unified Diff instead of the full file.
-3. If the changes are large and a diff is not reliable, provide the full file content.
-4. Do not assume any change without specifying the file path.
-5. Each file's changes must be independent and reviewable.
-6. Also specify dependencies, install commands, and commands needed to run.
-7. Paths must be relative to the project root.
-8. Do not abbreviate code or use phrases like "rest of the code unchanged".
-9. Put the final output only inside a single valid JSON block; no extra text before or after.
+## قالب خروجی
+- بالای بلوک کد دقیقاً یک خط تیتر ### diff بنویس، و بلافاصله بعد از آن یک بلوک کد با زبان json که کل JSON داخل آن است.
+- هیچ توضیح دیگری قبل یا بعد از آن ننویس، مگر اینکه خودم بخواهم.
 
-Output structure:
+## مثال کامل (فقط الگوی ساختار است؛ محتوای آن را کپی نکن)
+فرض کن فایل src/app.js فعلی این است:
+${FENCE}js
+${EXAMPLE_ORIGINAL_APP}${FENCE}
 
-{
-  "format": "code-change-package",
-  "version": 1,
-  "project": { "name": "project-name" },
-  "summary": "Description of changes",
-  "files": [
-    { "path": "src/example.js", "action": "create", "content": "Full content of new file" },
-    { "path": "src/app.js", "action": "patch", "patch": "Full Git Unified Diff" },
-    { "path": "src/config.js", "action": "replace", "content": "Full replacement content" },
-    { "path": "src/legacy.js", "action": "delete" }
-  ],
-  "commands": [ "npm install", "npm run build" ]
-}
+خروجی درست این است:
 
-The action values must be only create, patch, replace, or delete.
-For patch, always produce a standard, git-applicable diff.
-JSON must be valid; escape strings, newlines, and special characters correctly.
+### diff
+${FENCE}json
+${EXAMPLE_JSON}
+${FENCE}
 
-Place the output inside a code block with language json. The format must be exactly code-change-package and version must be 1. For patch, use a standard Git Unified Diff (--- a/... and +++ b/... and @@ -l,c +l,c @@ lines), and paths must be relative without a leading slash.`;
+## چک‌لیست قبل از ارسال
+- آیا همه خطوط hunk با فاصله، - یا + شروع می‌شوند؟
+- آیا خط‌های خالیِ context یک فاصله دارند؟
+- آیا context دقیقاً مطابق فایل اصلی است؟
+- آیا JSON معتبر است و commands وجود دارد؟
+- آیا فقط یک تیتر ### diff و یک بلوک json ارسال می‌کنم؟`;
+
+const PROMPT_EN = `From now on, when generating or modifying project code, output ONLY a structured Code Change Package.
+
+## General rules
+1. Every path is relative to the project root: no leading /, no .., no Windows drive letters.
+2. New file: action "create" with the full content in "content".
+3. Existing file, small change: action "patch" with a Git Unified Diff in "patch".
+4. Existing file, large change (more than about half of the file): action "replace" with the full file in "content".
+5. Delete a file: action "delete" (no content, no patch).
+6. Never abbreviate code or write things like "rest of the code unchanged".
+7. Each path may appear only once in "files".
+8. Put required commands (install, migrate, build, ...) in "commands"; if none are needed use []. The "commands" key must always be present.
+9. "project.name" and "summary" must always be filled in.
+
+## Patch rules (the most important part; mistakes are common here)
+- Exact structure: a "--- a/path" line, a "+++ b/path" line, then one or more hunks with a header like @@ -oldStart,oldCount +newStart,newCount @@
+- Inside a hunk every line starts with exactly one of: a space (unchanged), - (removed), + (added).
+- An unchanged blank line must still carry one space (in JSON: "\\n \\n"). Never write a completely empty line without the space.
+- Include about 3 unchanged context lines before and after each change, copied exactly from the original file (same indentation and spacing).
+- oldCount = context lines + removed lines. newCount = context lines + added lines. Compute the start line numbers carefully.
+- If you have not seen the current file content and are not sure about it, use "replace" instead of "patch"; do not guess.
+- The patch must end with a single \\n.
+
+## JSON rules
+- Fully valid JSON: strings in "...", newlines as \\n, quotes inside strings as \\", backslashes as \\\\ , no comments, no trailing commas.
+- "format" must be exactly "code-change-package" and "version" must be the number 1.
+- "action" must be only one of create, patch, replace, delete.
+
+## Output format
+- Right above the code block write exactly one heading line: ### diff, followed immediately by a single code block with language json that contains the whole JSON.
+- Write no other text before or after it unless I ask.
+
+## Full example (only a structure pattern; do not copy its content)
+Assume the current src/app.js is:
+${FENCE}js
+${EXAMPLE_ORIGINAL_APP}${FENCE}
+
+The correct output is:
+
+### diff
+${FENCE}json
+${EXAMPLE_JSON}
+${FENCE}
+
+## Checklist before sending
+- Does every hunk line start with a space, - or +?
+- Do blank context lines carry a single space?
+- Does the context match the original file exactly?
+- Is the JSON valid and is "commands" present?
+- Am I sending exactly one ### diff heading and one json block?`;
 
 $("chooseFolder").addEventListener("click", chooseFolder);
 $("scan").addEventListener("click", scanPage);

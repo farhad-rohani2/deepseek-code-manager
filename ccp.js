@@ -52,7 +52,7 @@
 
     // --- اعتبارسنجی مسیر نسبی امن ---
     function safeRelativePath(input) {
-        let path = String(input || "").trim().replace(/\\\\/g, "/").replace(/^\/+/, "");
+        let path = String(input || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
         if (!path || path.includes("\0") || /^[a-z]:/i.test(path)) return null;
         const parts = path.split("/").filter(Boolean);
         if (parts.some(p => p === "." || p === "..")) return null;
@@ -113,7 +113,7 @@
                 // برای delete نیازی به content/patch نیست
             });
         }
-        if (!Array.isArray(obj.commands)) errors.push("commands باید آرایه باشد (می‌تواند خالی باشد).");
+        if (obj.commands !== undefined && !Array.isArray(obj.commands)) errors.push("commands در صورت وجود باید آرایه باشد.");
         return { ok: errors.length === 0, errors };
     }
 
@@ -168,61 +168,85 @@
         } catch { return false; }
     }
 
-    // اعمال یک patch متنی به محتوای فعلی
+    // اعمال patch با تحمل خطاهای رایج خروجی مدل‌ها:
+    //  - شماره خط نادرست (hunk با جست‌وجوی نزدیک‌ترین تطابق پیدا می‌شود)
+    //  - تعداد خطوط نادرست در هدر hunk (نادیده گرفته می‌شود)
+    //  - خط خالی context بدون فاصله ابتدایی
+    //  - فایل‌های CRLF و فاصله‌های انتهایی خط
     function applyUnifiedDiff(originalText, patchText) {
-        const origLines = originalText.split("\n");
-        const patchLines = patchText.split("\n");
-        let i = 0;
-        while (i < patchLines.length && !/^@@ /.test(patchLines[i])) i++;
-        if (i >= patchLines.length) throw new Error("hunk در patch پیدا نشد.");
+        const eol = originalText.includes("\r\n") ? "\r\n" : "\n";
+        const work = originalText.replace(/\r\n/g, "\n").split("\n");
+        const patchLines = String(patchText).replace(/\r\n/g, "\n").split("\n");
+        if (patchLines.length && patchLines[patchLines.length - 1] === "") patchLines.pop();
 
-        const result = [];
-        let cursor = 0;
-
-        while (i < patchLines.length) {
-            const header = patchLines[i];
-            if (!/^@@ /.test(header)) { i++; continue; }
-            const m = header.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-            if (!m) throw new Error("خط hunk نامعتبر: " + header);
-            const oldStart = parseInt(m[1], 10);
-            const oldCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
-            const startIdx = Math.max(0, oldStart - 1);
-            while (cursor < startIdx && cursor < origLines.length) {
-                result.push(origLines[cursor++]);
+        const hunks = [];
+        let cur = null;
+        for (const line of patchLines) {
+            const m = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+            if (m) {
+                cur = { oldStart: parseInt(m[1], 10), ops: [] };
+                hunks.push(cur);
+                continue;
             }
-            i++;
-            let removed = 0;
-            let added = 0;
-            while (i < patchLines.length && !/^@@ /.test(patchLines[i])) {
-                const line = patchLines[i];
-                if (line === "" && i === patchLines.length - 1) break;
-                if (line.startsWith("\\")) { i++; continue; }
-                const tag = line[0];
-                const body = line.slice(1);
-                if (tag === " ") {
-                    if (cursor >= origLines.length || origLines[cursor] !== body) {
-                        throw new Error(`عدم تطابق context در خط ${cursor + 1}: انتظار "${body}" دریافت "${origLines[cursor]}"`);
-                    }
-                    result.push(origLines[cursor++]);
-                    removed++; added++;
-                } else if (tag === "-") {
-                    if (cursor >= origLines.length || origLines[cursor] !== body) {
-                        throw new Error(`عدم تطابق حذف در خط ${cursor + 1}: انتظار "${body}" دریافت "${origLines[cursor]}"`);
-                    }
-                    cursor++; removed++;
-                } else if (tag === "+") {
-                    result.push(body); added++;
-                } else {
-                    throw new Error("خط نامعتبر در patch: " + line);
-                }
-                i++;
-            }
-            if (oldCount !== undefined && removed !== oldCount) {
-                throw new Error(`تعداد خطوط حذف‌شده در hunk (${removed}) با هدر (${oldCount}) نمی‌خواند.`);
-            }
+            if (!cur) continue;                      // هدرهای قبل از اولین hunk
+            if (line.startsWith("\\")) continue;     // \ No newline at end of file
+            if (/^diff --git /.test(line)) { cur = null; continue; }
+            if (line === "") { cur.ops.push({ t: " ", s: "" }); continue; }
+            const t = line[0];
+            if (t !== " " && t !== "-" && t !== "+") throw new Error("خط نامعتبر در patch: " + line);
+            cur.ops.push({ t, s: line.slice(1) });
         }
-        while (cursor < origLines.length) result.push(origLines[cursor++]);
-        return result.join("\n");
+        if (!hunks.length) throw new Error("hunk در patch پیدا نشد.");
+
+        const norm = (x) => x.replace(/\s+$/, "");
+        let delta = 0;
+
+        for (const [hi, hunk] of hunks.entries()) {
+            let ops = hunk.ops;
+            const attempt = (list) => {
+                const old = list.filter(o => o.t !== "+").map(o => o.s);
+                if (old.length === 0) {
+                    const pos = Math.min(Math.max(hunk.oldStart + delta, 0), work.length);
+                    return { start: pos, old };
+                }
+                const base = Math.min(Math.max(hunk.oldStart - 1 + delta, 0), work.length);
+                const matches = (st) => {
+                    if (st < 0 || st + old.length > work.length) return false;
+                    for (let k = 0; k < old.length; k++) if (norm(work[st + k]) !== norm(old[k])) return false;
+                    return true;
+                };
+                for (let d = 0; d <= work.length; d++) {
+                    if (matches(base + d)) return { start: base + d, old };
+                    if (d && matches(base - d)) return { start: base - d, old };
+                }
+                return null;
+            };
+
+            let found = attempt(ops);
+            if (!found) {
+                // تلاش دوم: حذف خطوط خالی context ابتدا/انتهای hunk
+                let a = 0, b = ops.length;
+                while (a < b && ops[a].t === " " && ops[a].s.trim() === "") a++;
+                while (b > a && ops[b - 1].t === " " && ops[b - 1].s.trim() === "") b--;
+                ops = ops.slice(a, b);
+                found = attempt(ops);
+            }
+            if (!found) {
+                const first = ops.find(o => o.t !== "+");
+                throw new Error(`hunk شماره ${hi + 1} در فایل پیدا نشد (اولین خط مورد انتظار: "${first ? first.s : ""}"). احتمالاً فایل با نسخه‌ای که مدل دیده فرق دارد.`);
+            }
+
+            const out = [];
+            let p = found.start;
+            for (const op of ops) {
+                if (op.t === " ") out.push(work[p++]);
+                else if (op.t === "-") p++;
+                else out.push(op.s);
+            }
+            work.splice(found.start, found.old.length, ...out);
+            delta += out.length - found.old.length;
+        }
+        return work.join(eol);
     }
 
     async function applyCCP(rootHandle, ccp, options) {
@@ -264,7 +288,7 @@
                     log.push(`⇄ patch اعمال شد: ${safe}`); patched++;
                 } else if (file.action === "delete") {
                     if (!(await fileExists(rootHandle, safe))) {
-                        log.push(`↷ فایل برای حذف وجود ندارد: ${safe}`); skipped++; continue;
+                        log.push(`↷ از قبل وجود ندارد (حذف‌شده فرض شد): ${safe}`); continue;
                     }
                     await deleteFile(rootHandle, safe);
                     log.push(`✗ حذف شد: ${safe}`); deleted++;

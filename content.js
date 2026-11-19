@@ -137,30 +137,107 @@
     } catch (_) { /* ignore */ }
   }
 
-  function showToast(text) {
-    const t = document.createElement("div");
-    t.className = "dscm-ccp-toast";
-    t.textContent = text;
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 2200);
+  // --- ذخیره/بازیابی handle پوشه در IndexedDB خودِ صفحه (جدا از پاپ‌آپ) ---
+  const DB_NAME = "dscm-page-db";
+  const STORE = "handles";
+  function openDb() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function saveHandle(handle) {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).put(handle, "project");
+      tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+    });
+  }
+  async function loadHandle() {
+    try {
+      const db = await openDb();
+      return await new Promise((resolve, reject) => {
+        const req = db.transaction(STORE).objectStore(STORE).get("project");
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (_) { return null; }
+  }
+  async function ensurePermission(handle) {
+    const opts = { mode: "readwrite" };
+    if (await handle.queryPermission(opts) === "granted") return true;
+    return (await handle.requestPermission(opts)) === "granted";
   }
 
-  async function handleApplyClick(button, text) {
-    button.classList.add("dscm-ccp-busy");
+  function showToast(text, isError, ms) {
+    const t = document.createElement("div");
+    t.className = "dscm-ccp-toast" + (isError ? " dscm-ccp-toast-error" : "");
+    t.textContent = text;
+    t.addEventListener("click", () => t.remove());
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), ms || 5000);
+  }
+
+  async function handleApplyClick(button, text, event) {
+    if (button.classList.contains("dscm-ccp-busy")) return;
     const original = button.textContent;
-    button.textContent = "در حال ذخیره...";
+    const finish = (label) => {
+      button.classList.remove("dscm-ccp-busy");
+      button.textContent = label || original;
+      if (label) setTimeout(() => { button.textContent = original; }, 2200);
+    };
+    button.classList.add("dscm-ccp-busy");
+    button.textContent = "در حال اعمال...";
+
     const res = parseAndValidate(text);
     if (!res.ok) {
-      showToast("بسته CCP نامعتبر است: " + res.error);
-      button.textContent = original;
-      button.classList.remove("dscm-ccp-busy");
-      return;
+      const detail = res.errors?.length ? "\n" + res.errors.join("\n") : "";
+      showToast("بسته CCP نامعتبر است: " + res.error + detail, true, 8000);
+      return finish();
     }
     await saveLastCcp(res.ccp, "inline-button");
-    showToast("بسته در افزونه ذخیره شد. پاپ‌آپ را باز کن و اعمال کن.");
-    button.textContent = "✓ ذخیره شد";
-    button.classList.remove("dscm-ccp-busy");
-    setTimeout(() => { button.textContent = original; }, 1800);
+
+    if (!window.showDirectoryPicker) {
+      showToast("این مرورگر انتخاب پوشه را پشتیبانی نمی‌کند. بسته ذخیره شد؛ از پاپ‌آپ اعمال کن.", true, 7000);
+      return finish();
+    }
+
+    try {
+      // مجوز/انتخاب پوشه باید بلافاصله بعد از کلیک انجام شود (user activation)
+      let handle = event && event.altKey ? null : await loadHandle();
+      if (handle) {
+        let ok = false;
+        try { ok = await ensurePermission(handle); } catch (_) { ok = false; }
+        if (!ok) handle = null;
+      }
+      if (!handle) {
+        handle = await window.showDirectoryPicker({ mode: "readwrite" });
+        try { await saveHandle(handle); } catch (_) { /* ذخیره‌نشدن handle مانع اعمال نیست */ }
+      }
+
+      const ccp = res.ccp;
+      const preview = ccp.files.map(f => `${f.action}: ${f.path}`).join("\n");
+      if (!confirm(`این تغییرات در پوشه «${handle.name}» اعمال می‌شوند:\n\n${preview}\n\nادامه می‌دهی؟\n(برای تغییر پوشه، Alt را نگه دار و دوباره کلیک کن)`)) return finish();
+
+      let overwrite = false;
+      if (ccp.files.some(f => f.action === "create")) {
+        overwrite = confirm("اگر فایلی که action آن create است از قبل وجود داشته باشد، جایگزین شود؟\n\nOK = جایگزین شود\nCancel = رد شود");
+      }
+
+      const result = await CCP.applyCCP(handle, ccp, { overwrite });
+      const summary = `${result.written} ایجاد، ${result.replaced} جایگزین، ${result.patched} patch، ${result.deleted} حذف، ${result.skipped} رد شد.`;
+      const lines = result.skipped > 0 ? "\n" + result.log.join("\n") : "";
+      showToast(`پوشه «${handle.name}»: ${summary}${lines}`, result.skipped > 0, result.skipped > 0 ? 12000 : 5000);
+      console.info("[DSCM] CCP log", result.log);
+      finish(result.skipped > 0 ? "⚠ تمام شد (جزئیات بالا)" : "✓ اعمال شد");
+    } catch (e) {
+      if (e && e.name === "AbortError") return finish();
+      showToast("خطا در اعمال بسته: " + (e?.message || e) + "\nدوباره کلیک کن؛ اگر ادامه داشت پوشه را با Alt+کلیک عوض کن.", true, 9000);
+      finish();
+    }
   }
 
   function addApplyButtonIfCcp(banner) {
@@ -173,12 +250,12 @@
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = APPLY_CLASS;
-    btn.textContent = "اعمال تغییرات";
-    btn.title = "این CCP را در افزونه ذخیره کن";
+    btn.textContent = "⚡ اعمال روی پروژه";
+    btn.title = "اعمال این CCP روی پوشه پروژه (Alt+کلیک: تغییر پوشه)";
     btn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      handleApplyClick(btn, text);
+      handleApplyClick(btn, text, event);
     });
     header.appendChild(btn);
 
