@@ -18,7 +18,6 @@
       const candidate = node.querySelector("pre");
       if (candidate && candidate !== banner) return { root: node, pre: candidate };
     }
-    // Fallback: locate the next pre element in document order.
     let next = banner.parentElement;
     for (let i = 0; i < 5 && next; i++, next = next.parentElement) {
       const all = [...next.querySelectorAll("pre")];
@@ -117,7 +116,6 @@
   }
 
   function findLastCodeBlockText() {
-    // ۱) اولویت: تیترهای h3/h2/... با عنوان diff / code-change-package / ccp
     let last = "";
     const headings = document.querySelectorAll("h1,h2,h3,h4,h5,h6");
     for (const heading of headings) {
@@ -129,7 +127,6 @@
     }
     if (last) return last;
 
-    // ۲) همه بلوک‌های کد معمولی
     const banners = [...document.querySelectorAll(".md-code-block-banner-wrap")];
     for (const banner of banners) {
       const found = findCodeRoot(banner);

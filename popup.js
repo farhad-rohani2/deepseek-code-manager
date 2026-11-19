@@ -91,9 +91,9 @@ function renderCcp() {
   const ccp = ccpData;
   summary.hidden = false;
   summary.textContent =
-      `${ccp.project?.name || "پروژه"} · ${ccp.summary || ""}\n` +
-      `${ccp.files.length} فایل` +
-      (ccp.commands?.length ? ` · ${ccp.commands.length} دستور` : "");
+    `${ccp.project?.name || "پروژه"} · ${ccp.summary || ""}\n` +
+    `${ccp.files.length} فایل` +
+    (ccp.commands?.length ? ` · ${ccp.commands.length} دستور` : "");
   ccp.files.forEach((file, index) => {
     ccpSelected.add(index);
     const row = document.createElement("div");
@@ -259,7 +259,7 @@ async function writeOne(root, path, content, overwrite) {
 async function createFiles() {
   if (!directoryHandle) { setStatus("ابتدا پوشه پروژه را انتخاب کن."); return; }
   const selected = [...$("fileList").querySelectorAll('input[type="checkbox"]:checked')]
-      .map(input => blocks[Number(input.dataset.index)]).filter(Boolean);
+    .map(input => blocks[Number(input.dataset.index)]).filter(Boolean);
   const prepared = selected.map(block => ({ ...block, safePath: safeRelativePath(block.path) }));
   const invalid = prepared.filter(b => !b.safePath);
   if (invalid.length) { setStatus("مسیر نامعتبر وجود دارد؛ مسیر فایل‌ها را بررسی کن."); return; }
