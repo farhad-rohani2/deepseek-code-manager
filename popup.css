@@ -12,8 +12,6 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .secondary { background: #edf0f4; color: #252a32; width: 100%; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .actions #scan { grid-column: 1 / -1; }
-.actions #loadCcp { grid-column: 1 / -1; }
-.actions #applyCcp { grid-column: 1 / -1; }
 .status { color: #596271; font-size: 11px; margin: 9px 0; }
 .file-list { max-height: 220px; overflow: auto; }
 .file-row { border-top: 1px solid #edf0f3; padding: 8px 0; }
@@ -28,9 +26,18 @@ footer { text-align: center; }
 .badge-create { background: #dcfce7; color: #166534; }
 .badge-patch  { background: #fef9c3; color: #854d0e; }
 .badge-replace{ background: #dbeafe; color: #1e40af; }
+.badge-delete { background: #fee2e2; color: #991b1b; }
+.file-row.selected .badge-delete { background: #fecaca; }
 .ccp-summary { background: #f5f6f8; border-radius: 7px; padding: 8px; margin-bottom: 8px; font-size: 11px; color: #404653; white-space: pre-wrap; }
 .paste-wrap { margin: 8px 0; border: 1px dashed #cfd6df; border-radius: 8px; padding: 6px 9px; background: #fbfcfe; }
 .paste-wrap summary { cursor: pointer; font-size: 11px; color: #4b5563; font-weight: 650; }
 .paste-area { width: 100%; margin-top: 8px; border: 1px solid #d7dde5; border-radius: 7px; padding: 8px; font-family: ui-monospace, monospace; font-size: 11px; direction: ltr; text-align: left; resize: vertical; background: white; }
 .paste-area:focus { outline: 2px solid #2563eb33; border-color: #2563eb; }
 .paste-wrap button { margin-top: 6px; }
+.prompt-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+.top-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.top-apply { background: #16a34a; color: white; font-weight: 700; padding: 10px 8px; }
+.top-apply:hover:not(:disabled) { background: #15803d; }
+.top-apply:disabled { background: #a7f3d0; color: #065f46; }
+.top-reload { background: #eef2f7; color: #1e40af; font-weight: 600; padding: 10px 8px; }
+.top-reload:hover { background: #dbeafe; }

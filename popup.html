@@ -32,7 +32,23 @@
 </section>
 
 <section class="panel">
+  <div class="section-title">پرامپت آماده</div>
+  <div class="prompt-actions">
+    <button id="copyPromptFa" class="secondary">کپی پرامپت فارسی</button>
+    <button id="copyPromptEn" class="secondary">Copy English Prompt</button>
+  </div>
+  <div id="promptStatus" class="status">پرامپت را کپی و در چت DeepSeek ارسال کن.</div>
+</section>
+
+<section class="panel">
   <div class="section-title">بسته تغییرات (Code Change Package)</div>
+
+  <div class="top-bar">
+    <button id="applyCcpTop" class="top-apply" type="button" disabled>⚡ اعمال سریع بسته</button>
+    <button id="loadCcp" class="top-reload" type="button">⟳ بازخوانی از صفحه</button>
+  </div>
+
+  <div id="ccpSavedHint" class="status" hidden>یک بسته ذخیره‌شده از قبل موجود است.</div>
   <div id="ccpStatus" class="status">هنوز بسته‌ای شناسایی نشده است.</div>
   <div id="ccpSummary" class="ccp-summary" hidden></div>
 
@@ -44,13 +60,11 @@
 
   <div id="ccpList" class="file-list"></div>
   <label class="check"><input type="checkbox" id="ccpOverwrite"> فایل‌های موجود را جایگزین کن</label>
-  <div class="actions">
-    <button id="loadCcp" class="secondary">بازخوانی بسته از صفحه</button>
-    <button id="applyCcp" class="primary" disabled>اعمال بسته تغییرات</button>
-  </div>
+  <button id="applyCcp" class="primary" disabled>اعمال بسته تغییرات</button>
+  <button id="clearSavedCcp" class="secondary clear-saved" type="button">پاک کردن بسته ذخیره‌شده</button>
 </section>
 
-<footer>نسخه ۱.۲ · فایل‌ها فقط پس از انتخاب پوشه و تأیید تو نوشته می‌شوند.</footer>
+<footer>نسخه ۱.۴ · فایل‌ها فقط پس از انتخاب پوشه و تأیید تو نوشته می‌شوند.</footer>
 <script src="ccp.js"></script>
 <script src="popup.js"></script>
 </body>

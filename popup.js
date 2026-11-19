@@ -5,6 +5,7 @@ let ccpData = null;
 let ccpSelected = new Set();
 const DB_NAME = "dscm-db";
 const STORE = "handles";
+const STORAGE_KEY = "dscm:lastCcp";
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -119,6 +120,8 @@ function renderCcp() {
     if (file.action === "patch") {
       const len = (file.patch || "").split("\n").length;
       meta.append(` · ${len} خط diff`);
+    } else if (file.action === "delete") {
+      meta.append(" · حذف کامل فایل");
     } else {
       meta.append(` · ${(file.content || "").length.toLocaleString()} کاراکتر`);
     }
@@ -131,7 +134,11 @@ function renderCcp() {
 }
 
 function updateApplyButton() {
-  $("applyCcp").disabled = !ccpData || ccpSelected.size === 0;
+  const disabled = !ccpData || ccpSelected.size === 0;
+  const main = $("applyCcp");
+  const top = $("applyCcpTop");
+  if (main) main.disabled = disabled;
+  if (top) top.disabled = disabled;
 }
 
 function parseCcpText(rawText) {
@@ -146,12 +153,45 @@ function parseCcpText(rawText) {
   return { ok: true, ccp: parsed.ccp };
 }
 
+async function saveCcpToStorage(ccp, source) {
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEY]: { ccp, savedAt: Date.now(), source: source || "popup" }
+    });
+  } catch (_) { /* ignore */ }
+}
+
+async function loadCcpFromStorage() {
+  try {
+    const data = await chrome.storage.local.get(STORAGE_KEY);
+    const entry = data?.[STORAGE_KEY];
+    if (!entry?.ccp) return null;
+    const validation = window.CCP ? CCP.validateCCP(entry.ccp) : { ok: true };
+    if (!validation.ok) return null;
+    return entry;
+  } catch { return null; }
+}
+
+async function clearCcpFromStorage() {
+  try { await chrome.storage.local.remove(STORAGE_KEY); } catch (_) {}
+}
+
+function applyLoadedCcp(entry, originLabel) {
+  if (!entry?.ccp) return false;
+  ccpData = entry.ccp;
+  renderCcp();
+  const when = entry.savedAt ? new Date(entry.savedAt).toLocaleTimeString() : "";
+  $("ccpSavedHint").hidden = false;
+  $("ccpSavedHint").textContent = `بسته ذخیره‌شده بازیابی شد (${originLabel})${when ? " · " + when : ""}.`;
+  setCcpStatus(`بسته از ذخیره بازیابی شد: ${ccpData.files.length} فایل.`);
+  return true;
+}
+
 async function loadCcpFromPage() {
   setCcpStatus("در حال خواندن بسته از صفحه...");
   try {
     const response = await sendToPage({ type: "DSCM_EXTRACT_CCP" });
     if (!response?.ok) {
-      ccpData = null; renderCcp();
       const detail = response?.errors?.length ? "\n" + response.errors.join("\n") : "";
       setCcpStatus((response?.error || "خطا در خواندن بسته.") + detail, true);
       $("ccpPasteWrap").open = true;
@@ -159,9 +199,11 @@ async function loadCcpFromPage() {
     }
     ccpData = response.ccp;
     renderCcp();
-    setCcpStatus(`بسته شناسایی شد: ${ccpData.files.length} فایل.`);
+    await saveCcpToStorage(ccpData, "popup-load");
+    $("ccpSavedHint").hidden = false;
+    $("ccpSavedHint").textContent = "بسته در حافظه ذخیره شد؛ دفعه بعد نیازی به بازخوانی نیست.";
+    setCcpStatus(`بسته شناسایی و ذخیره شد: ${ccpData.files.length} فایل.`);
   } catch (e) {
-    ccpData = null; renderCcp();
     setCcpStatus(e.message || "خطا در خواندن صفحه.", true);
     $("ccpPasteWrap").open = true;
   }
@@ -171,14 +213,16 @@ function parsePastedCcp() {
   const raw = $("ccpPasteArea").value;
   const result = parseCcpText(raw);
   if (!result.ok) {
-    ccpData = null; renderCcp();
     const detail = result.errors?.length ? "\n" + result.errors.join("\n") : "";
     setCcpStatus((result.error || "تحلیل ناموفق بود.") + detail, true);
     return;
   }
   ccpData = result.ccp;
   renderCcp();
-  setCcpStatus(`بسته پیست‌شده تحلیل شد: ${ccpData.files.length} فایل.`);
+  saveCcpToStorage(ccpData, "paste");
+  $("ccpSavedHint").hidden = false;
+  $("ccpSavedHint").textContent = "بسته پیست‌شده ذخیره شد.";
+  setCcpStatus(`بسته پیست‌شده تحلیل و ذخیره شد: ${ccpData.files.length} فایل.`);
 }
 
 async function applyCcp() {
@@ -192,7 +236,7 @@ async function applyCcp() {
     if (!(await ensurePermission(directoryHandle))) { setCcpStatus("مجوز نوشتن در پوشه داده نشد.", true); return; }
     const ccp = { ...ccpData, files: selectedFiles };
     const result = await CCP.applyCCP(directoryHandle, ccp, { overwrite: $("ccpOverwrite").checked });
-    setCcpStatus(`تمام شد: ${result.written} ایجاد، ${result.replaced} جایگزین، ${result.patched} patch، ${result.skipped} رد شد.`);
+    setCcpStatus(`تمام شد: ${result.written} ایجاد، ${result.replaced} جایگزین، ${result.patched} patch، ${result.deleted} حذف، ${result.skipped} رد شد.`);
     console.info("CCP log", result.log);
   } catch (e) {
     setCcpStatus("خطا در اعمال بسته: " + e.message, true);
@@ -279,6 +323,87 @@ async function createFiles() {
   } catch (e) { setStatus("خطا هنگام ساخت فایل: " + e.message); }
 }
 
+async function copyPrompt(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+    $("promptStatus").textContent = `${label} کپی شد. در چت DeepSeek پیست کن.`;
+  } catch (e) {
+    $("promptStatus").textContent = "کپی ناموفق بود: " + e.message;
+  }
+}
+
+const PROMPT_FA = `از این به بعد هنگام تولید یا اصلاح کد پروژه، خروجی را به شکل یک بسته تغییرات ساختاریافته (Code Change Package) تولید کن.
+
+قواعد:
+
+1. اگر فایل جدیدی لازم است، مسیر کامل نسبی آن را مشخص کن.
+2. اگر فایل موجود باید اصلاح شود، به‌جای ارسال کل فایل، تغییرات را در قالب Git Unified Diff ارائه بده.
+3. اگر تغییرات گسترده هستند و Diff قابل اتکا نیست، محتوای کامل فایل را ارسال کن.
+4. هیچ تغییری را بدون مشخص کردن مسیر فایل انجام‌شده فرض نکن.
+5. تغییرات هر فایل باید مستقل و قابل بررسی باشند.
+6. وابستگی‌ها، دستورات نصب و دستورات لازم برای اجرا را نیز مشخص کن.
+7. مسیرها باید نسبی به ریشه پروژه باشند.
+8. کدها را خلاصه نکن و از عبارت‌هایی مثل «بقیه کد بدون تغییر» استفاده نکن.
+9. خروجی نهایی را فقط در یک بلوک JSON معتبر قرار بده؛ قبل و بعد از آن توضیح اضافه ننویس.
+
+ساختار خروجی:
+
+{
+  "format": "code-change-package",
+  "version": 1,
+  "project": { "name": "project-name" },
+  "summary": "توضیح تغییرات",
+  "files": [
+    { "path": "src/example.js", "action": "create", "content": "کد کامل فایل جدید" },
+    { "path": "src/app.js", "action": "patch", "patch": "محتوای کامل Git Unified Diff" },
+    { "path": "src/config.js", "action": "replace", "content": "محتوای کامل فایل جایگزین" },
+    { "path": "src/legacy.js", "action": "delete" }
+  ],
+  "commands": [ "npm install", "npm run build" ]
+}
+
+مقادیر action فقط create، patch، replace و delete باشند.
+برای patch حتماً Diff استاندارد و قابل اعمال با Git تولید کن.
+JSON باید معتبر باشد و رشته‌ها، خط‌های جدید و کاراکترهای خاص به‌درستی Escape شوند.
+
+خروجی را در یک بلاک کد با زبان json قرار بده. حتماً format دقیقاً برابر code-change-package و version برابر 1 باشد. برای patch از Git Unified Diff استاندارد (--- a/... و +++ b/... و خطوط @@ -l,c +l,c @@) استفاده کن و مسیرها در path نسبی و بدون / ابتدایی باشند.`;
+
+const PROMPT_EN = `From now on, when generating or modifying project code, produce the output as a structured Code Change Package.
+
+Rules:
+
+1. If a new file is needed, specify its full relative path.
+2. If an existing file must be modified, provide the changes as a Git Unified Diff instead of the full file.
+3. If the changes are large and a diff is not reliable, provide the full file content.
+4. Do not assume any change without specifying the file path.
+5. Each file's changes must be independent and reviewable.
+6. Also specify dependencies, install commands, and commands needed to run.
+7. Paths must be relative to the project root.
+8. Do not abbreviate code or use phrases like "rest of the code unchanged".
+9. Put the final output only inside a single valid JSON block; no extra text before or after.
+
+Output structure:
+
+{
+  "format": "code-change-package",
+  "version": 1,
+  "project": { "name": "project-name" },
+  "summary": "Description of changes",
+  "files": [
+    { "path": "src/example.js", "action": "create", "content": "Full content of new file" },
+    { "path": "src/app.js", "action": "patch", "patch": "Full Git Unified Diff" },
+    { "path": "src/config.js", "action": "replace", "content": "Full replacement content" },
+    { "path": "src/legacy.js", "action": "delete" }
+  ],
+  "commands": [ "npm install", "npm run build" ]
+}
+
+The action values must be only create, patch, replace, or delete.
+For patch, always produce a standard, git-applicable diff.
+JSON must be valid; escape strings, newlines, and special characters correctly.
+
+Place the output inside a code block with language json. The format must be exactly code-change-package and version must be 1. For patch, use a standard Git Unified Diff (--- a/... and +++ b/... and @@ -l,c +l,c @@ lines), and paths must be relative without a leading slash.`;
+
 $("chooseFolder").addEventListener("click", chooseFolder);
 $("scan").addEventListener("click", scanPage);
 $("collapseAll").addEventListener("click", () => collapseAll("DSCM_COLLAPSE_ALL"));
@@ -286,5 +411,26 @@ $("expandAll").addEventListener("click", () => collapseAll("DSCM_EXPAND_ALL"));
 $("createFiles").addEventListener("click", createFiles);
 $("loadCcp").addEventListener("click", loadCcpFromPage);
 $("applyCcp").addEventListener("click", applyCcp);
+$("applyCcpTop").addEventListener("click", applyCcp);
 $("parsePaste").addEventListener("click", parsePastedCcp);
-restoreFolder();
+$("copyPromptFa").addEventListener("click", () => copyPrompt(PROMPT_FA, "پرامپت فارسی"));
+$("copyPromptEn").addEventListener("click", () => copyPrompt(PROMPT_EN, "English prompt"));
+$("clearSavedCcp").addEventListener("click", async () => {
+  await clearCcpFromStorage();
+  ccpData = null; renderCcp();
+  $("ccpSavedHint").hidden = true;
+  setCcpStatus("بسته ذخیره‌شده پاک شد.");
+});
+
+async function bootstrap() {
+  await restoreFolder();
+  const saved = await loadCcpFromStorage();
+  if (saved) {
+    applyLoadedCcp(saved, saved.source === "inline-button" ? "از دکمه صفحه" : "ذخیره‌شده");
+  } else {
+    // اگر ذخیره‌ای نبود، یک‌بار تلاش می‌کنیم از صفحه بخوانیم.
+    loadCcpFromPage().catch(() => {});
+  }
+}
+
+bootstrap();

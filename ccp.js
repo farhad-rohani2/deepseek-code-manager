@@ -3,7 +3,7 @@
     "use strict";
 
     const FORMAT = "code-change-package";
-    const ACTIONS = new Set(["create", "patch", "replace"]);
+    const ACTIONS = new Set(["create", "patch", "replace", "delete"]);
 
     // --- پیدا کردن آخرین بلوک JSON معتبر داخل متن ---
     function extractJsonCandidates(text) {
@@ -74,13 +74,10 @@
         }
         if (!hasFileHeader) return { ok: false, error: "هدر فایل (---/+++/diff --git) در patch پیدا نشد." };
         if (!hasHunk) return { ok: false, error: "هیچ hunk (@@ ... @@) در patch پیدا نشد." };
-        // بررسی ساده تعداد خطوط hunk
-        let hunk = null;
         for (const line of lines) {
             if (/^@@ /.test(line)) {
                 const m = line.match(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/);
                 if (!m) return { ok: false, error: "فرمت خط hunk نامعتبر است: " + line };
-                hunk = true;
             }
         }
         return { ok: true };
@@ -102,7 +99,7 @@
             obj.files.forEach((f, i) => {
                 const where = `files[${i}]`;
                 if (!f || typeof f !== "object") { errors.push(`${where} معتبر نیست.`); return; }
-                if (!ACTIONS.has(f.action)) errors.push(`${where}.action باید یکی از create/patch/replace باشد.`);
+                if (!ACTIONS.has(f.action)) errors.push(`${where}.action باید یکی از create/patch/replace/delete باشد.`);
                 const safe = safeRelativePath(f.path);
                 if (!safe) errors.push(`${where}.path نامعتبر یا ناامن است.`);
                 else if (seenPaths.has(safe)) errors.push(`${where}.path تکراری است: ${safe}`);
@@ -113,6 +110,7 @@
                 } else if (f.action === "create" || f.action === "replace") {
                     if (typeof f.content !== "string") errors.push(`${where}.content باید رشته باشد.`);
                 }
+                // برای delete نیازی به content/patch نیست
             });
         }
         if (!Array.isArray(obj.commands)) errors.push("commands باید آرایه باشد (می‌تواند خالی باشد).");
@@ -153,6 +151,13 @@
         await w.close();
     }
 
+    async function deleteFile(root, path) {
+        const parts = path.split("/");
+        const name = parts.pop();
+        const dir = await getDirectory(root, parts, false);
+        await dir.removeEntry(name);
+    }
+
     async function fileExists(root, path) {
         try {
             const parts = path.split("/");
@@ -163,18 +168,16 @@
         } catch { return false; }
     }
 
-    // اعمال یک patch متنی به محتوای فعلی (پشتیبانی از contextdiff چند hunk)
+    // اعمال یک patch متنی به محتوای فعلی
     function applyUnifiedDiff(originalText, patchText) {
         const origLines = originalText.split("\n");
         const patchLines = patchText.split("\n");
         let i = 0;
-
-        // پیدا کردن اولین hunk
         while (i < patchLines.length && !/^@@ /.test(patchLines[i])) i++;
         if (i >= patchLines.length) throw new Error("hunk در patch پیدا نشد.");
 
         const result = [];
-        let cursor = 0; // ایندکس در origLines
+        let cursor = 0;
 
         while (i < patchLines.length) {
             const header = patchLines[i];
@@ -183,9 +186,7 @@
             if (!m) throw new Error("خط hunk نامعتبر: " + header);
             const oldStart = parseInt(m[1], 10);
             const oldCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
-            // محاسبه شروع 0-based
             const startIdx = Math.max(0, oldStart - 1);
-            // کپی تا شروع hunk
             while (cursor < startIdx && cursor < origLines.length) {
                 result.push(origLines[cursor++]);
             }
@@ -195,7 +196,7 @@
             while (i < patchLines.length && !/^@@ /.test(patchLines[i])) {
                 const line = patchLines[i];
                 if (line === "" && i === patchLines.length - 1) break;
-                if (line.startsWith("\\")) { i++; continue; } // "No newline"
+                if (line.startsWith("\\")) { i++; continue; }
                 const tag = line[0];
                 const body = line.slice(1);
                 if (tag === " ") {
@@ -216,12 +217,10 @@
                 }
                 i++;
             }
-            // بررسی تعداد خطوط
             if (oldCount !== undefined && removed !== oldCount) {
                 throw new Error(`تعداد خطوط حذف‌شده در hunk (${removed}) با هدر (${oldCount}) نمی‌خواند.`);
             }
         }
-        // کپی باقیمانده
         while (cursor < origLines.length) result.push(origLines[cursor++]);
         return result.join("\n");
     }
@@ -229,7 +228,7 @@
     async function applyCCP(rootHandle, ccp, options) {
         const overwrite = Boolean(options?.overwrite);
         const log = [];
-        let written = 0, replaced = 0, patched = 0, skipped = 0;
+        let written = 0, replaced = 0, patched = 0, deleted = 0, skipped = 0;
 
         if (!(await ensurePermission(rootHandle))) {
             throw new Error("مجوز نوشتن در پوشه داده نشد.");
@@ -263,12 +262,18 @@
                     catch (e) { log.push(`✗ patch ناموفق (${safe}): ${e.message}`); skipped++; continue; }
                     await writeTextFile(rootHandle, safe, updated);
                     log.push(`⇄ patch اعمال شد: ${safe}`); patched++;
+                } else if (file.action === "delete") {
+                    if (!(await fileExists(rootHandle, safe))) {
+                        log.push(`↷ فایل برای حذف وجود ندارد: ${safe}`); skipped++; continue;
+                    }
+                    await deleteFile(rootHandle, safe);
+                    log.push(`✗ حذف شد: ${safe}`); deleted++;
                 }
             } catch (e) {
                 log.push(`✗ خطا (${safe}): ${e.message}`); skipped++;
             }
         }
-        return { written, replaced, patched, skipped, log };
+        return { written, replaced, patched, deleted, skipped, log };
     }
 
     global.CCP = { parseCCP, validateCCP, validateUnifiedDiff, applyCCP, safeRelativePath, applyUnifiedDiff };
